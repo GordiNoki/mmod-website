@@ -44,6 +44,7 @@ import {
 import { RunProcessor } from './run-processor.class';
 import { ValkeyService } from '../../valkey/valkey.service';
 import { RunFileStoreService } from '../../filestore/run-file-store.service';
+import { RealTimeService } from '../../real-time/real-time.service';
 
 @Injectable()
 export class RunSessionService {
@@ -52,7 +53,8 @@ export class RunSessionService {
     private readonly fileStoreService: RunFileStoreService,
     private readonly valkey: ValkeyService,
     private readonly xpSystems: XpSystemsService,
-    private readonly mapsService: MapsService
+    private readonly mapsService: MapsService,
+    private readonly io: RealTimeService
   ) {}
 
   //#region Create Session
@@ -121,6 +123,8 @@ export class RunSessionService {
     if (Sentry.isInitialized()) {
       Sentry.setTag('session_id', id);
     }
+
+    this.io.emit('newSession', { userID, ...leaderboardData });
 
     return DtoFactory(RunSessionDto, {
       id,
@@ -252,6 +256,8 @@ export class RunSessionService {
       session as CompletedRunSession,
       user
     );
+
+    this.io.emit('endSession', { userID, processedRun });
 
     return this.saveSubmittedRun(processedRun, replay);
   }
