@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link href="styles.css" rel="stylesheet" />
+  </head>
+  <body class="font-[Roboto] text-2xl">
+    <div class="m-auto flex w-[1000px] rounded-2xl bg-[#323232] p-4 text-white">
+      <div class="w-100">
+        <div class="font-display m-auto text-center text-4xl font-bold">Team Red</div>
+        <div>Player 1</div>
+        <div>Player 2</div>
+      </div>
+      <div class="font-display min-w-[300px] text-center text-4xl font-bold">
+        <div>surf_fuck_you</div>
+      </div>
+      <div class="w-100">
+        <div class="font-display m-auto text-center text-4xl font-bold">Team Blue</div>
+        <div>Player 1</div>
+        <div>Player 2</div>
+      </div>
+    </div>
+    <script src="http://localhost:3001/socket.io/socket.io.js"></script>
+    <script>
+      var socket = io('http://localhost:3001');
+      socket.onAny(console.log);
+    </script>
+  </body>
+</html>
