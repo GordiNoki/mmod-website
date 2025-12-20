@@ -119,23 +119,27 @@
       }
 
       function fullDataUpdate() {
-        map.innerText = fullData.map.name;
+        if (fullData.map) {
+          map.innerText = fullData.map.name;
+        }
 
         team1Members.innerHTML = '';
-        fullData.team1
-          .map((u) => {
-            const run = fullData.runs.find((run) => run.userID == u.id && run.trackType == 0);
-            return createUserEl(u, run);
-          })
-          .forEach((el) => team1Members.appendChild(el));
+        if (fullData.team1)
+          fullData.team1
+            .map((u) => {
+              const run = fullData.runs.find((run) => run.userID == u.id && run.trackType == 0);
+              return createUserEl(u, run);
+            })
+            .forEach((el) => team1Members.appendChild(el));
 
         team2Members.innerHTML = '';
-        fullData.team2
-          .map((u) => {
-            const run = fullData.runs.find((run) => run.userID == u.id && run.trackType == 0);
-            return createUserEl(u, run);
-          })
-          .forEach((el) => team2Members.appendChild(el));
+        if (fullData.team2)
+          fullData.team2
+            .map((u) => {
+              const run = fullData.runs.find((run) => run.userID == u.id && run.trackType == 0);
+              return createUserEl(u, run);
+            })
+            .forEach((el) => team2Members.appendChild(el));
       }
 
       function loadFullData() {
