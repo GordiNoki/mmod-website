@@ -105,7 +105,7 @@ export class RealTimeService extends Server implements OnModuleInit {
       members.push(...team2.map(({ id }) => id));
     }
     const runs =
-      members.length > 0
+      this.settings.mapID !== null && members.length > 0
         ? await this.db.leaderboardRun.findMany({
             where: {
               mapID: this.settings.mapID,
