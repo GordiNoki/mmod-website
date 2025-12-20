@@ -76,6 +76,11 @@ export const SIDENAV_ITEMS: Array<{
         title: 'Utilities',
         link: '/admin/utilities',
         icon: 'tools'
+      },
+      {
+        title: 'Timer Settings',
+        link: '/admin/real-time',
+        icon: 'wrench-clock'
       }
     ]
   },

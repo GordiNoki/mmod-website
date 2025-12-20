@@ -15,7 +15,8 @@ import {
   Killswitches,
   AdminGetAdminActivitiesQuery,
   AdminActivity,
-  AdminAnnouncement
+  AdminAnnouncement,
+  RealTimeSettings
 } from '@momentum/constants';
 import { HttpService } from './http.service';
 
@@ -112,5 +113,21 @@ export class AdminService {
 
   createAnnouncement(announcement: AdminAnnouncement): Observable<void> {
     return this.http.post('admin/announcement', { body: announcement });
+  }
+
+  getRealTimeSettings(): Observable<RealTimeSettings> {
+    return this.http.get('real-time/settings');
+  }
+
+  setRealTimeSettings(settings: RealTimeSettings): Observable<void> {
+    return this.http.patch('real-time/settings', { body: settings });
+  }
+
+  setTimerState(timerStart: number | null): Observable<void> {
+    return this.http.patch('real-time/timer', { body: { timerStart } });
+  }
+
+  nukeRuns(): Observable<void> {
+    return this.http.delete('real-time/runs');
   }
 }

@@ -692,3 +692,19 @@ export interface TwitchUser {
 }
 
 //#endregion
+
+export interface RealTimeTeam {
+  name: string;
+  color: string;
+  memberIDs: number[];
+}
+
+export interface RealTimeSettings extends Record<string, any> {
+  team1: number | null;
+  team2: number | null;
+  mapID: number | null;
+  allowTimes: boolean;
+  pauseTime: number | null;
+  timerStart: number | null;
+  teams: RealTimeTeam[];
+}

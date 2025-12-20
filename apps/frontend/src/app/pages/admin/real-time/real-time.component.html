@@ -1,0 +1,81 @@
+<m-card title="Timer Settings">
+  <div class="flex flex-col gap-8">
+    <form (ngSubmit)="submitTimerSettings()" [formGroup]="timerSettingsForm" class="flex flex-col items-start gap-4">
+      <h4>Timer Settings</h4>
+      <div>
+        <p class="text-lg">Set Team 1</p>
+        <p-select formControlName="team1" [options]="teams" optionValue="id" optionLabel="name" appendTo="body" />
+      </div>
+      <div>
+        <p class="text-lg">Set Team 2</p>
+        <p-select formControlName="team2" [options]="teams" optionValue="id" optionLabel="name" appendTo="body" />
+      </div>
+      <div>
+        <p class="text-lg">Set Map</p>
+        <p>ID: {{ timerSettingsForm.get('mapID').value }}</p>
+        <m-map-search (selected)="setMap($event)" />
+        <!-- <p-select formControlName="team2" [options]="teams" optionValue="id" optionLabel="name" appendTo="body" /> -->
+      </div>
+
+      <div><input type="checkbox" class="checkbox mr-1" formControlName="allowTimes" />Allow submitting times</div>
+
+      <button class="btn btn-blue" type="submit" [disabled]="!timerSettingsForm.dirty">Submit</button>
+    </form>
+
+    <div class="flex flex-col items-start gap-4">
+      <h4>Timer controls</h4>
+      <button type="button" header class="btn btn-blue" (click)="resetTimer()">Reset Timer</button>
+      <button type="button" header class="btn btn-blue" (click)="startTimer()">Start Timer</button>
+      <button type="button" header class="btn btn-blue" (click)="pauseResumeTimer()">Pause / Resume Timer</button>
+      <button type="button" header class="btn btn-red" (click)="deleteTimes()">Delete current map runs</button>
+    </div>
+
+    <div class="flex flex-col items-start gap-4">
+      <h4>Team assignments</h4>
+
+      <div>
+        <p class="text-lg">Team</p>
+        <p-select
+          [(ngModel)]="teamAssignTeam"
+          (onChange)="onTeamSet()"
+          [options]="teams"
+          optionValue="id"
+          optionLabel="name"
+          appendTo="body"
+        />
+      </div>
+
+      @if (teamAssignTeam !== null) {
+        <div class="flex flex-col overflow-y-auto rounded bg-black bg-opacity-25 py-2">
+          @for (user of teamAssignUsers; track user) {
+            <div class="flex items-center bg-white bg-opacity-0 p-2 px-4 transition-colors hover:bg-opacity-5">
+              <m-user [user]="user" aliasClass="text-base ml-1" />
+              <button type="button" class="btn btn-red ml-2 py-1" (click)="removeUser(user.id)">Delete</button>
+            </div>
+          }
+        </div>
+        <div>
+          <m-user-search #searchInput (selected)="addUser($event, searchInput)" />
+        </div>
+
+        <button (click)="updateTeam()" class="btn btn-blue" type="submit">Update team</button>
+      }
+    </div>
+
+    <form (ngSubmit)="createTeam()" [formGroup]="teamCreateForm" class="flex flex-col items-start gap-4">
+      <h4>Create Team</h4>
+
+      <div>
+        <p class="text-lg">Team Name</p>
+        <input class="textinput textinput-validated !max-w-full" type="text" formControlName="name" />
+      </div>
+
+      <div>
+        <p class="text-lg">Team Color</p>
+        <p-colorpicker formControlName="color" />
+      </div>
+
+      <button class="btn btn-blue" type="submit">Create team</button>
+    </form>
+  </div>
+</m-card>

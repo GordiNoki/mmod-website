@@ -2,6 +2,7 @@ import { Route } from '@angular/router';
 import { ReportQueueComponent } from './report-queue/report-queue.component';
 import { AdminActivityComponent } from './admin-activity/admin-activity.component';
 import { UtilitiesComponent } from './utilities/utilities.component';
+import { RealTimeComponent } from './real-time/real-time.component';
 import { AdminMapsBrowserComponent } from '../maps/browsers/admin-maps-browser.component';
 
 export default [
@@ -24,5 +25,10 @@ export default [
     path: 'utilities',
     component: UtilitiesComponent,
     title: 'Admin Utilities'
+  },
+  {
+    path: 'real-time',
+    component: RealTimeComponent,
+    title: 'Timer Settings'
   }
 ] satisfies Route[];

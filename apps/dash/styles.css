@@ -7,13 +7,11 @@
 @import '@fontsource/roboto/700.css';
 @import '@fontsource/roboto/700-italic.css';
 
-@import 'tailwindcss';
-
 @import '../frontend/src/app/theme/shared_styling/fonts/BebasNeue/300.css';
 @import '../frontend/src/app/theme/shared_styling/fonts/BebasNeue/400.css';
 @import '../frontend/src/app/theme/shared_styling/fonts/BebasNeue/700.css';
 @import '../frontend/src/app/theme/shared_styling/colors/colors-css-vars.css';
 
-@theme {
-  --font-display: "Bebas Neue Momentum";
-}
+@tailwind base;
+@tailwind components;
+@tailwind utilities;

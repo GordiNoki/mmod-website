@@ -54,7 +54,7 @@ export class RunSessionService {
     private readonly valkey: ValkeyService,
     private readonly xpSystems: XpSystemsService,
     private readonly mapsService: MapsService,
-    private readonly io: RealTimeService
+    private readonly rt: RealTimeService
   ) {}
 
   //#region Create Session
@@ -63,6 +63,11 @@ export class RunSessionService {
     userID: number,
     body: CreateRunSessionDto
   ): Promise<RunSessionDto> {
+    if (!this.rt.settings.allowTimes)
+      throw new BadRequestException(
+        'Run sessions disabled by real time module'
+      );
+
     const leaderboardData = {
       mapID: body.mapID,
       gamemode: body.gamemode,
@@ -124,7 +129,7 @@ export class RunSessionService {
       Sentry.setTag('session_id', id);
     }
 
-    this.io.emit('newSession', { userID, ...leaderboardData });
+    this.rt.emit('newSession', { userID, ...leaderboardData });
 
     return DtoFactory(RunSessionDto, {
       id,
@@ -257,7 +262,7 @@ export class RunSessionService {
       user
     );
 
-    this.io.emit('endSession', { userID, processedRun });
+    this.rt.emit('endSession', { userID, processedRun });
 
     return this.saveSubmittedRun(processedRun, replay);
   }

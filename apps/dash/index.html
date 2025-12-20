@@ -6,25 +6,166 @@
     <link href="styles.css" rel="stylesheet" />
   </head>
   <body class="font-[Roboto] text-2xl">
-    <div class="m-auto flex w-[1000px] rounded-2xl bg-[#323232] p-4 text-white">
-      <div class="w-100">
-        <div class="font-display m-auto text-center text-4xl font-bold">Team Red</div>
-        <div>Player 1</div>
-        <div>Player 2</div>
+    <div class="m-auto flex max-w-[1000px] rounded-2xl bg-[#323232] p-4 text-white transition-all">
+      <div class="w-full">
+        <div id="team1" class="m-auto text-center font-display text-4xl font-bold" style="display: none">Team Red</div>
+        <div id="team1Members"></div>
       </div>
-      <div class="font-display min-w-[300px] text-center text-4xl font-bold">
-        <div>surf_fuck_you</div>
+      <div class="flex min-w-[300px] flex-col justify-center text-center font-display text-4xl font-bold">
+        <div id="map"></div>
+        <div id="timer" class="text-5xl">15:00</div>
       </div>
-      <div class="w-100">
-        <div class="font-display m-auto text-center text-4xl font-bold">Team Blue</div>
-        <div>Player 1</div>
-        <div>Player 2</div>
+      <div class="w-full">
+        <div id="team2" class="m-auto text-center font-display text-4xl font-bold" style="display: none">Team Blue</div>
+        <div id="team2Members"></div>
       </div>
     </div>
-    <script src="http://localhost:3001/socket.io/socket.io.js"></script>
+    <script src="socket.io/socket.io.js"></script>
     <script>
-      var socket = io('http://localhost:3001');
+      const timer = document.getElementById('timer');
+      const team1 = document.getElementById('team1');
+      const team2 = document.getElementById('team2');
+      const team1Members = document.getElementById('team1Members');
+      const team2Members = document.getElementById('team2Members');
+      const map = document.getElementById('map');
+      const timerTime = 15 * 60 * 1000;
+
+      let socket = io();
+      let settings = null;
+      let fullData = null;
+
+      function padNum(num) {
+        return num.toString().padStart(2, '0');
+      }
+
+      function timerTiming(input, clean) {
+        const hours = Math.trunc(input / 3600000);
+        const minutes = Math.trunc((input / 60000) % 60000);
+        const seconds = Math.trunc((input / 1000) % 60);
+        const millis = Math.trunc(input % 1000);
+
+        if (hours > 0) {
+          return `${padNum(hours)}:${padNum(minutes)}:${padNum(seconds)}`;
+        } else {
+          return `${padNum(minutes)}:${padNum(seconds)}`;
+        }
+      }
+
+      function runTiming(input, clean) {
+        const hours = Math.trunc(input / 3600);
+        const minutes = Math.trunc((input / 60) % 60);
+        const seconds = Math.trunc(input % 60);
+        const millis = Math.trunc((input % 1) * 1000);
+        const hundredths = Math.trunc(millis / 10);
+
+        if (hours > 0) {
+          return `${padNum(hours)}:${padNum(minutes)}:${padNum(seconds)}`;
+        } else if (minutes > 0) {
+          return `${padNum(minutes)}:${padNum(seconds)}.${padNum(hundredths)}`;
+        } else {
+          return `${seconds}.${padNum(hundredths)}`;
+        }
+      }
+
+      function updateTimer() {
+        const timeLeft = timerTime - (Date.now() - settings.timerStart);
+        const time = timerTiming(timeLeft <= 0 ? (settings.timerStart === null ? timerTime : 0) : timeLeft);
+        timer.innerText = time;
+      }
+
+      setInterval(() => {
+        if (settings === null || settings.timerStart === null || settings.pauseTime !== null) return;
+        updateTimer();
+      }, 1000);
+
+      function updateTeams() {
+        if (settings.team1 !== null) {
+          const teamData = settings.teams[settings.team1];
+          team1.innerText = teamData.name;
+          team1.style.color = teamData.color;
+          team1.style.display = 'block';
+        } else {
+          team1.style.display = 'none';
+        }
+        if (settings.team2 !== null) {
+          const teamData = settings.teams[settings.team2];
+          team2.innerText = teamData.name;
+          team2.style.color = teamData.color;
+          team2.style.display = 'block';
+        } else {
+          team2.style.display = 'none';
+        }
+      }
+
+      function settingsUpdate() {
+        updateTimer();
+        updateTeams();
+      }
+
+      function createUserEl(user, run = null) {
+        const buh = document.createElement('div');
+        buh.className = 'flex justify-between';
+        const name = document.createElement('div');
+        name.innerText = user.alias;
+        const time = document.createElement('div');
+        time.innerText = run ? runTiming(run.time) : '-';
+        time.id = user.id + '-time';
+        time.dataset.time = run ? run.time : '';
+        buh.appendChild(name);
+        buh.appendChild(time);
+        return buh;
+      }
+
+      function fullDataUpdate() {
+        map.innerText = fullData.map.name;
+
+        team1Members.innerHTML = '';
+        fullData.team1
+          .map((u) => {
+            const run = fullData.runs.find((run) => run.userID == u.id && run.trackType == 0);
+            return createUserEl(u, run);
+          })
+          .forEach((el) => team1Members.appendChild(el));
+
+        team2Members.innerHTML = '';
+        fullData.team2
+          .map((u) => {
+            const run = fullData.runs.find((run) => run.userID == u.id && run.trackType == 0);
+            return createUserEl(u, run);
+          })
+          .forEach((el) => team2Members.appendChild(el));
+      }
+
+      function loadFullData() {
+        socket.emit('getFullData', null, (data) => {
+          fullData = data;
+          fullDataUpdate();
+        });
+      }
+
+      function checkNewSettings(newSettings) {
+        return settings.mapID !== newSettings.mapID || settings.team1 !== newSettings.team1 || settings.team2 !== newSettings.team2;
+      }
+
       socket.onAny(console.log);
+      socket.on('settings', (sett) => {
+        const needFullData = !settings || checkNewSettings(sett);
+        settings = sett;
+        if (needFullData) loadFullData();
+        settingsUpdate();
+      });
+
+      socket.on('endSession', ({ userID, processedRun }) => {
+        const el = document.getElementById(userID + '-time');
+        if (!el) return;
+        if (processedRun.trackType == 0 && processedRun.mapID == settings.mapID) {
+          const oldTime = el.dataset.time ? +el.dataset.time : null;
+          if (!oldTime || processedRun.time < oldTime) {
+            el.innerText = runTiming(processedRun.time);
+            el.dataset.time = processedRun.time;
+          }
+        }
+      });
     </script>
   </body>
 </html>
