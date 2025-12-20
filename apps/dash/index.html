@@ -30,7 +30,9 @@
       const map = document.getElementById('map');
       const timerTime = 15 * 60 * 1000;
 
-      let socket = io();
+      let socket = io(window.location.host, {
+        path: '/timer/socket.io/'
+      });
       let settings = null;
       let fullData = null;
 
