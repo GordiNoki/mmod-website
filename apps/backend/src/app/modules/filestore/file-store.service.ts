@@ -13,12 +13,23 @@ import { createHash } from 'node:crypto';
 
 export class FileStoreService {
   private readonly s3Client: S3Client;
+  private readonly publicS3Client: S3Client;
   private readonly bucket: string;
 
   constructor(config: S3ClientConfig) {
     this.s3Client = new S3Client({
       region: config.region,
       endpoint: config.endpointUrl,
+      credentials: {
+        accessKeyId: config.accessKeyID,
+        secretAccessKey: config.secretAccessKey
+      },
+      forcePathStyle: true
+    });
+
+    this.publicS3Client = new S3Client({
+      region: config.region,
+      endpoint: config.publicUrl ?? config.endpointUrl,
       credentials: {
         accessKeyId: config.accessKeyID,
         secretAccessKey: config.secretAccessKey
@@ -176,7 +187,7 @@ export class FileStoreService {
       ContentLength: fileSize
     });
 
-    return await getSignedUrl(this.s3Client, command, {
+    return await getSignedUrl(this.publicS3Client, command, {
       expiresIn: urlExpires
     });
   }
@@ -209,4 +220,5 @@ export interface S3ClientConfig {
   accessKeyID: string;
   secretAccessKey: string;
   bucket: string;
+  publicUrl?: string;
 }
