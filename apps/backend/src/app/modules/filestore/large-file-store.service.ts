@@ -11,7 +11,7 @@ export class LargeFileStoreService extends FileStoreService {
       accessKeyID: config.getOrThrow('storage.accessKeyID'),
       secretAccessKey: config.getOrThrow('storage.secretAccessKey'),
       bucket: config.getOrThrow('storage.bucketName'),
-      publicUrl: config.getOrThrow('url.cdn')
+      publicUrl: config.getOrThrow('url.cdn').split('/').slice(0, -1).join('/')
     });
   }
 }
