@@ -70,6 +70,7 @@ export class RealTimeService extends Server implements OnModuleInit {
     await this.db.leaderboardRun.deleteMany({
       where: { mapID: this.settings.mapID }
     });
+    this.emit('fullDataReload');
   }
 
   async getFullData() {

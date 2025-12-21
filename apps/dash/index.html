@@ -172,6 +172,10 @@
           }
         }
       });
+
+      socket.on('fullDataReload', () => {
+        loadFullData();
+      });
     </script>
   </body>
 </html>
