@@ -244,9 +244,12 @@ export class RealTimeComponent implements OnInit {
   }
 
   get teams() {
-    return (this.realTimeSettings?.teams ?? []).map((t, i) => ({
-      ...t,
-      id: i
-    }));
+    return [
+      { id: null, name: '-' },
+      ...(this.realTimeSettings?.teams?.map((t, i) => ({
+        ...t,
+        id: i
+      })) ?? [])
+    ];
   }
 }
