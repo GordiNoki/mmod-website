@@ -88,7 +88,7 @@ export class RealTimeService extends Server implements OnModuleInit {
             .then((arr) => arr.map((t) => plainToInstance(UserDto, t)))
         : null;
     const team2 =
-      this.settings.team1 !== null
+      this.settings.team2 !== null
         ? await this.db.user
             .findMany({
               where: {
