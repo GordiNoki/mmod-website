@@ -61,6 +61,7 @@ import {
 import Zip from 'adm-zip';
 import {
   BabyZonesStubString,
+  ZonesStub,
   ZonesStubLeaderboards,
   ZonesStubString
 } from '@momentum/formats/zone';
@@ -1132,6 +1133,87 @@ describe('Admin', () => {
 
         expect(mapDB.currentVersion.versionNum).toBe(2);
         expect(res.body.currentVersion.id).toBe(mapDB.currentVersion.id);
+      });
+
+      it('should allow admin to add a new map version when map is approved', async () => {
+        await prisma.mMap.update({
+          where: { id: map.id },
+          data: {
+            status: MapStatus.APPROVED,
+            info: { update: { approvedDate: new Date() } }
+          }
+        });
+
+        await req.postAttach({
+          url: `admin/maps/${map.id}`,
+          status: 201,
+          data: { changelog: 'meow' },
+          files: [{ file: vmfBuffer, field: 'vmfs', fileName: 'surf_map.vmf' }],
+          validate: MapDto,
+          token: adminToken
+        });
+      });
+
+      it('should allow updating zones when map is approved', async () => {
+        await prisma.mMap.update({
+          where: { id: map.id },
+          data: {
+            status: MapStatus.APPROVED,
+            info: { update: { approvedDate: new Date() } }
+          }
+        });
+
+        const zones = structuredClone(ZonesStub);
+        zones.tracks.main.zones.segments[0].name = 'Bob';
+
+        await req.postAttach({
+          url: `admin/maps/${map.id}`,
+          status: 201,
+          data: { changelog: 'Oh, he is here too', zones },
+          validate: MapDto,
+          token: adminToken
+        });
+      });
+
+      it('should not allow updating zones that create leaderboards when map is approved', async () => {
+        await prisma.mMap.update({
+          where: { id: map.id },
+          data: {
+            status: MapStatus.APPROVED,
+            info: { update: { approvedDate: new Date() } }
+          }
+        });
+
+        const zones = structuredClone(ZonesStub);
+        zones.tracks.bonuses.push(zones.tracks.bonuses[0]);
+
+        await req.postAttach({
+          url: `admin/maps/${map.id}`,
+          status: 400,
+          data: { changelog: 'beer', zones },
+          token: adminToken
+        });
+      });
+
+      it('should allow updating zones that create leaderboards when map is in testing and was approved', async () => {
+        await prisma.mMap.update({
+          where: { id: map.id },
+          data: {
+            status: MapStatus.PUBLIC_TESTING,
+            info: { update: { approvedDate: new Date() } }
+          }
+        });
+
+        const zones = structuredClone(ZonesStub);
+        zones.tracks.bonuses.push(zones.tracks.bonuses[0]);
+
+        await req.postAttach({
+          url: `admin/maps/${map.id}`,
+          status: 201,
+          data: { changelog: 'More bones', zones },
+          validate: MapDto,
+          token: adminToken
+        });
       });
 
       it("should 400 if a VMF file is greater than the config's max vmf file size", async () => {

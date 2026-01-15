@@ -1332,6 +1332,10 @@ export class MapsService {
         throw new ForbiddenException(
           'Submitters can only edit map during submission'
         );
+      } else if (dto.leaderboards) {
+        throw new ForbiddenException(
+          'Submitters are not allowed to update map leaderboards'
+        );
       }
     } else if (!Bitflags.has(user.roles, CombinedRoles.MOD_OR_ADMIN)) {
       if (Bitflags.has(user.roles, Role.REVIEWER)) {
