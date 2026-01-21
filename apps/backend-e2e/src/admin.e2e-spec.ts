@@ -60,6 +60,7 @@ import {
 } from '@momentum/db';
 import Zip from 'adm-zip';
 import {
+  BabyZonesStub,
   BabyZonesStubString,
   ZonesStub,
   ZonesStubLeaderboards,
@@ -1498,32 +1499,290 @@ describe('Admin', () => {
             token: reviewerToken
           });
         });
-
-        it('should allow an admin to update suggestions during submission', async () => {
-          const map = await db.createMap({
-            ...createMapData,
-            status: MapStatus.PUBLIC_TESTING
-          });
-
-          await req.patch({
-            url: `admin/maps/${map.id}`,
-            status: 204,
-            body: {
-              name: 'surf_asbestos',
-              suggestions: [
-                {
-                  trackNum: 1,
-                  trackType: TrackType.MAIN,
-                  gamemode: Gamemode.BHOP,
-                  tier: 1,
-                  type: LeaderboardType.UNRANKED
-                }
-              ]
-            },
-            token: adminToken
-          });
-        });
       }
+
+      it('should allow an admin to update suggestions during submission', async () => {
+        const map = await db.createMap({
+          ...createMapData,
+          status: MapStatus.PUBLIC_TESTING
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            name: 'surf_asbestos',
+            suggestions: [
+              {
+                trackNum: 1,
+                trackType: TrackType.MAIN,
+                gamemode: Gamemode.BHOP,
+                tier: 1,
+                type: LeaderboardType.UNRANKED
+              }
+            ]
+          },
+          token: adminToken
+        });
+      });
+
+      it('should allow an admin to update leaderboards when map is approved', async () => {
+        const map = await db.createMap({
+          ...createMapData,
+          status: MapStatus.FINAL_APPROVAL
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            status: MapStatus.APPROVED,
+            finalLeaderboards: [
+              {
+                gamemode: Gamemode.RJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 1,
+                type: LeaderboardType.RANKED
+              },
+              {
+                gamemode: Gamemode.SJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                type: LeaderboardType.HIDDEN
+              }
+            ]
+          },
+          token: adminToken
+        });
+
+        const oldLeaderboards = await prisma.leaderboard.findMany({
+          where: { mapID: map.id, trackType: TrackType.MAIN, trackNum: 1 }
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            leaderboards: [
+              {
+                gamemode: Gamemode.SJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 4,
+                type: LeaderboardType.RANKED,
+                tags: [MapTag.Portals]
+              }
+            ]
+          },
+          token: adminToken
+        });
+
+        const newLeaderboards = await prisma.leaderboard.findMany({
+          where: { mapID: map.id, trackType: TrackType.MAIN, trackNum: 1 }
+        });
+        const newRanked = newLeaderboards.find(
+          (lb) => lb.type === LeaderboardType.RANKED
+        );
+
+        expect(newLeaderboards).toHaveLength(oldLeaderboards.length);
+
+        expect(newRanked.gamemode).toBe(Gamemode.SJ);
+        expect(newRanked.tier).toBe(4);
+        expect(newRanked.tags).toStrictEqual([MapTag.Portals]);
+      });
+
+      it('should not allow to update leaderboards to an unsupported gamemode', async () => {
+        const map = await db.createMap({
+          ...createMapData,
+          status: MapStatus.FINAL_APPROVAL
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            status: MapStatus.APPROVED,
+            finalLeaderboards: [
+              {
+                gamemode: Gamemode.RJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 1,
+                type: LeaderboardType.RANKED
+              },
+              {
+                gamemode: Gamemode.BHOP,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                type: LeaderboardType.HIDDEN
+              }
+            ]
+          },
+          token: adminToken
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 400,
+          body: {
+            leaderboards: [
+              {
+                gamemode: Gamemode.SJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 4,
+                type: LeaderboardType.RANKED,
+                tags: [MapTag.Portals]
+              }
+            ]
+          },
+          token: adminToken
+        });
+      });
+
+      it('should not allow to create leaderboards for new tracks when the map is approved', async () => {
+        const map = await db.createMap({
+          ...createMapData,
+          status: MapStatus.FINAL_APPROVAL
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            status: MapStatus.APPROVED,
+            finalLeaderboards: [
+              {
+                gamemode: Gamemode.RJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 1,
+                type: LeaderboardType.RANKED
+              },
+              {
+                gamemode: Gamemode.BHOP,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                type: LeaderboardType.HIDDEN
+              }
+            ]
+          },
+          token: adminToken
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 400,
+          body: {
+            leaderboards: [
+              {
+                gamemode: Gamemode.SJ,
+                trackType: TrackType.BONUS,
+                trackNum: 1,
+                tier: 4,
+                type: LeaderboardType.RANKED,
+                tags: [MapTag.Portals]
+              }
+            ]
+          },
+          token: adminToken
+        });
+      });
+
+      it('should allow an admin to create leaderboards for new tracks when the map is in testing and was approved', async () => {
+        const newZones = structuredClone(BabyZonesStub);
+        newZones.tracks.bonuses.push({
+          zones: newZones.tracks.main.zones
+        });
+
+        const map = await db.createMap({
+          ...createMapData,
+          status: MapStatus.FINAL_APPROVAL,
+          versions: {
+            create: {
+              versionNum: 1,
+              bspHash: createSha1Hash(
+                'apple banana cat dog elephant fox grape hat igloo joker'
+              ),
+              zones: BabyZonesStubString,
+              submitterID: u1.id
+            }
+          }
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            status: MapStatus.APPROVED,
+            finalLeaderboards: [
+              {
+                gamemode: Gamemode.RJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 1,
+                type: LeaderboardType.RANKED
+              }
+            ]
+          },
+          token: adminToken
+        });
+
+        await prisma.mMap.update({
+          where: { id: map.id },
+          data: {
+            status: MapStatus.PUBLIC_TESTING,
+            currentVersion: {
+              create: {
+                mapID: map.id,
+                versionNum: 2,
+                bspHash: createSha1Hash(
+                  'apple banana cat dog elephant fox grape hat igloo joker'
+                ),
+                zones: JSON.stringify(newZones),
+                submitterID: admin.id,
+                changelog: 'Oooops'
+              }
+            }
+          }
+        });
+
+        await req.patch({
+          url: `admin/maps/${map.id}`,
+          status: 204,
+          body: {
+            leaderboards: [
+              {
+                gamemode: Gamemode.RJ,
+                trackType: TrackType.MAIN,
+                trackNum: 1,
+                tier: 1,
+                type: LeaderboardType.RANKED
+              },
+              {
+                gamemode: Gamemode.RJ,
+                trackType: TrackType.BONUS,
+                trackNum: 1,
+                tier: 1,
+                type: LeaderboardType.RANKED
+              }
+            ]
+          },
+          token: adminToken
+        });
+
+        const createdLeaderboards = await prisma.leaderboard.findMany({
+          where: { mapID: map.id, trackType: TrackType.BONUS, trackNum: 1 }
+        });
+        const rankedLb = createdLeaderboards.find(
+          (lb) => lb.type === LeaderboardType.RANKED
+        );
+
+        expect(createdLeaderboards).not.toHaveLength(0);
+        expect(rankedLb).not.toBeNull();
+        expect(rankedLb.gamemode).toBe(Gamemode.RJ);
+      });
 
       const statuses = Enum.values(MapStatus);
       //prettier-ignore
