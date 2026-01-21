@@ -39,11 +39,11 @@ import {
   MIN_MAP_NAME_LENGTH,
   MMap,
   UpdateMap,
-  UpdateMapAdmin,
   User,
   YOUTUBE_ID_REGEXP,
   Role,
-  SteamGame
+  SteamGame,
+  TrackType
 } from '@momentum/constants';
 import { MessageService } from 'primeng/api';
 import { DialogService } from 'primeng/dynamicdialog';
@@ -139,10 +139,8 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
 
   protected loading = false;
 
+  wasApproved: boolean;
   isSubmitter: boolean;
-  isReviewer: boolean;
-  isAdmin: boolean;
-  isMod: boolean;
   inSubmission: boolean;
 
   private readonly reload = new Subject<void>();
@@ -209,6 +207,8 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
         SuggestionType.SUBMISSION
       )
     }),
+
+    leaderboards: this.nnfb.control<MapSubmissionSuggestion[] | null>(null),
 
     statusChange: this.nnfb.group({
       status: this.nnfb.control<MapStatus | -1>(-1),
@@ -278,16 +278,13 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
         takeUntilDestroyed(this.destroyRef)
       )
       .subscribe(async (map: MMap) => {
-        this.isAdmin = this.localUserService.isAdmin;
-        this.isMod = this.localUserService.isMod;
-        this.isReviewer = this.localUserService.hasRole(Role.REVIEWER);
         this.isSubmitter =
           map.submitterID === this.localUserService.user.value?.id;
         this.inSubmission = MapStatuses.IN_SUBMISSION.includes(map.status);
+        this.wasApproved = Boolean(map.info.approvedDate);
 
         if (
-          !this.isAdmin &&
-          !this.isMod &&
+          !this.isModOrAdmin &&
           !(this.inSubmission && (this.isSubmitter || this.isReviewer))
         )
           await this.router.navigate(['/maps/' + map.name]);
@@ -341,6 +338,42 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
 
     this.lbSelection.zones = this.map?.currentVersion?.zones;
     this.suggestions.setValue(this.map.submission.suggestions);
+    if (this.wasApproved) {
+      // Setup validatiors for approved maps
+      this.suggestions.setValidators(null);
+      this.suggestions.updateValueAndValidity();
+
+      this.leaderboards.setValue(
+        this.map.leaderboards
+          .filter(
+            (lb) =>
+              lb.type !== LeaderboardType.HIDDEN &&
+              lb.trackType !== TrackType.STAGE
+          )
+          .map((lb) => ({
+            ...lb,
+            type: lb.type as LeaderboardType.RANKED | LeaderboardType.UNRANKED,
+            style: undefined,
+            linear: undefined
+          }))
+      );
+
+      this.leaderboards.addValidators(
+        suggestionsValidator(
+          () => this.map?.currentVersion.zones,
+          SuggestionType.APPROVAL
+        )
+      );
+      this.leaderboards.updateValueAndValidity();
+
+      this.zon.addAsyncValidators(
+        FileValidators.hasZonesChange(
+          () => this.map.currentVersion.zones,
+          this.inSubmission && this.isAdmin
+        )
+      );
+      this.zon.updateValueAndValidity();
+    }
 
     if (
       this.map.status === MapStatus.FINAL_APPROVAL &&
@@ -369,7 +402,7 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
 
     this.loading = true;
 
-    const body: UpdateMap | UpdateMapAdmin = {};
+    const body: UpdateMap = {};
 
     if (this.name.dirty) body.name = this.name.value;
     if (this.submissionType.dirty)
@@ -399,17 +432,17 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
       body.info.requiredGames = this.requiredGames.value;
     }
     if (this.suggestions.dirty) body.suggestions = this.suggestions.value;
+    if (this.leaderboards.dirty) body.leaderboards = this.leaderboards.value;
     if (this.status.dirty) {
       body.status = this.status.value;
 
       if (this.finalLeaderboards.dirty) {
-        (body as UpdateMapAdmin).finalLeaderboards =
-          this.finalLeaderboards.value;
+        body.finalLeaderboards = this.finalLeaderboards.value;
       }
     }
 
     if (this.submitter.dirty && this.submitter.value) {
-      (body as UpdateMapAdmin).submitterID = this.submitter.value.id;
+      body.submitterID = this.submitter.value.id;
     }
 
     const hasImages = this.images.dirty && this.haveImagesActuallyChanged();
@@ -436,20 +469,15 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
         if (
           this.isSubmitter &&
           !(
-            (this.isAdmin || this.isMod) &&
+            this.isModOrAdmin &&
             (body.status === MapStatus.APPROVED ||
               this.map.status === MapStatus.APPROVED ||
               this.map.status === MapStatus.DISABLED)
-          ) &&
-          !(body as UpdateMapAdmin).submitterID
+          )
         ) {
-          await firstValueFrom(
-            this.mapsService.updateMap(this.map.id, body as UpdateMap)
-          );
+          await firstValueFrom(this.mapsService.updateMap(this.map.id, body));
         } else {
-          await firstValueFrom(
-            this.adminService.updateMap(this.map.id, body as UpdateMapAdmin)
-          );
+          await firstValueFrom(this.adminService.updateMap(this.map.id, body));
         }
       } catch (httpError) {
         this.messageService.add({
@@ -501,6 +529,9 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
         const realHasAuthors = real.some(
           ({ type }) => type === MapCreditType.AUTHOR
         );
+        const placeholdersHasAuthors = placeholders.some(
+          ({ type }) => type === MapCreditType.AUTHOR
+        );
         const realChanged = !deepEquals(
           this.map.credits.map(({ userID, type, description }) => ({
             userID,
@@ -536,13 +567,15 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
         // first, then placeholders. Sorry for the spaghetti!
         if (realChanged) {
           if (!realHasAuthors) {
-            if (!placeholdersChanged)
+            if (!placeholdersHasAuthors)
               // Validators should make this impossible.
               throw new Error(
                 'Trying to update to state that would contain no authors!'
               );
 
-            await updatePlaceholders();
+            if (placeholdersChanged) {
+              await updatePlaceholders();
+            }
             await updateReal();
           } else {
             await updateReal();
@@ -609,7 +642,7 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
 
     try {
       await lastValueFrom(
-        this.mapsService
+        (this.isSubmitter ? this.mapsService : this.adminService)
           .submitMapVersion(this.map.id, {
             vmfs: this.vmfs.value,
             data: {
@@ -644,7 +677,7 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
       this.messageService.add({
         severity: 'error',
         summary: 'Failed to post version!',
-        detail: JSON.stringify(error.error.message)
+        detail: JSON.stringify(JSON.parse(error.error).message)
       });
       this.isUploading = false;
       this.uploadPercentage = 0;
@@ -703,8 +736,8 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
       summary: 'Testing invites updated!'
     });
 
-    this.versionForm.markAsUntouched();
-    this.versionForm.markAsPristine();
+    this.testInviteForm.markAsUntouched();
+    this.testInviteForm.markAsPristine();
     this.isSubmittingTestInviteForm = false;
   }
 
@@ -864,6 +897,12 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
     >;
   }
 
+  get leaderboards() {
+    return this.mainForm.get('leaderboards') as FormControl<
+      MapSubmissionSuggestion[] | null
+    >;
+  }
+
   get bsp() {
     return this.versionForm.get('bsp') as FormControl<File | null>;
   }
@@ -900,5 +939,17 @@ export class MapEditComponent implements OnInit, ConfirmDeactivate {
     return this.mainForm.get('statusChange.finalLeaderboards') as FormControl<
       MapSubmissionApproval[]
     >;
+  }
+
+  get isReviewer() {
+    return this.localUserService.hasRole(Role.REVIEWER);
+  }
+
+  get isAdmin() {
+    return this.localUserService.isAdmin;
+  }
+
+  get isModOrAdmin() {
+    return this.localUserService.isMod || this.localUserService.isAdmin;
   }
 }

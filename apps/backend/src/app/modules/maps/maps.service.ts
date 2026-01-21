@@ -49,6 +49,7 @@ import {
 } from '@momentum/constants';
 import * as Bitflags from '@momentum/bitflags';
 import {
+  deepEquals,
   expandToIncludes,
   intersection,
   isEmpty,
@@ -64,7 +65,9 @@ import {
   SuggestionType,
   SuggestionValidationError,
   validateSuggestions,
+  validateZoneDiff,
   validateZoneFile,
+  ZoneDiffValidationError,
   ZoneValidationError
 } from '@momentum/formats/zone';
 import { BspHeader, BspReadError } from '@momentum/formats/bsp';
@@ -87,7 +90,6 @@ import {
   MapsGetAllUserSubmissionQueryDto,
   MapSummaryDto,
   PagedResponseDto,
-  UpdateMapAdminDto,
   UpdateMapDto
 } from '../../dto';
 import { FileStoreService } from '../filestore/file-store.service';
@@ -726,7 +728,8 @@ export class MapsService {
               map.currentVersion.bspDownloadId,
               bspFile,
               map.currentVersion.vmfDownloadId,
-              zippedVmf
+              zippedVmf,
+              dto.name
             );
           })()
         );
@@ -746,7 +749,9 @@ export class MapsService {
     await Promise.all(tasks);
 
     if (!dto.wantsPrivateTesting) {
-      void this.sendContentApprovalNotification(map.id);
+      void this.discordNotificationService.sendMapContentApprovalNotification(
+        await this.getMapInfoForNotification(map.id)
+      );
     }
 
     return DtoFactory(MapDto, map);
@@ -768,7 +773,14 @@ export class MapsService {
             dates: { orderBy: { date: 'asc' }, include: { user: true } }
           }
         },
-        info: true
+        info: true,
+        leaderboards: {
+          omit: { style: true, linear: true },
+          where: {
+            type: { not: LeaderboardType.HIDDEN },
+            trackType: { not: TrackType.STAGE }
+          }
+        }
       }
     });
 
@@ -776,7 +788,14 @@ export class MapsService {
       throw new NotFoundException('Map does not exist');
     }
 
-    if (map.submitterID !== userID)
+    const user = await this.db.user.findUnique({
+      where: { id: userID }
+    });
+
+    if (
+      !Bitflags.has(user.roles, CombinedRoles.MOD_OR_ADMIN) &&
+      map.submitterID !== userID
+    )
       throw new ForbiddenException('User is not the map submitter');
 
     // This should never happen but stops someone flooding S3 storage with
@@ -785,19 +804,17 @@ export class MapsService {
       throw new ForbiddenException('Reached map version limit');
     }
 
-    const { bans: userBans } = await this.db.user.findUnique({
-      where: { id: userID },
-      select: { bans: true }
-    });
-
     // If the user is banned from map submission, this map was *probably*
     // already rejected. But do this check just in case a mod bans them first
     // and hasn't yet rejected the map.
-    if (Bitflags.has(userBans, Ban.MAP_SUBMISSION)) {
+    if (Bitflags.has(user.bans, Ban.MAP_SUBMISSION)) {
       throw new ForbiddenException('User is banned from map submission');
     }
 
-    if (!MapStatuses.IN_SUBMISSION.includes(map.status)) {
+    if (
+      !MapStatuses.IN_SUBMISSION.includes(map.status) &&
+      !Bitflags.has(user.roles, Role.ADMIN)
+    ) {
       throw new ForbiddenException('Map does not allow editing');
     }
 
@@ -849,6 +866,14 @@ export class MapsService {
     let zones: MapZones;
     if (dto.zones) {
       this.checkZones(dto.zones);
+      if (map.info.approvedDate) {
+        this.checkIfZonesChanged(
+          dto.zones,
+          JSON.parse(map.currentVersion.zones),
+          MapStatuses.IN_SUBMISSION.includes(map.status) &&
+            Bitflags.has(user.roles, Role.ADMIN)
+        );
+      }
       zones = dto.zones;
       zonesStr = JSON.stringify(zones);
     } else {
@@ -919,7 +944,7 @@ export class MapsService {
         // If the submitter is fixing the maps in a significant enough way to
         // still require a leaderboard reset, they should just get an admin to
         // do it.
-        if (map.info.approvedDate) {
+        if (map.info.approvedDate && !Bitflags.has(user.roles, Role.ADMIN)) {
           throw new ForbiddenException(
             'Cannot reset leaderboards on a previously approved map.' +
               ' Talk about it with an admin!'
@@ -940,7 +965,8 @@ export class MapsService {
       newVersion.bspDownloadId,
       bspFile,
       newVersion.vmfDownloadId,
-      zippedVmf
+      zippedVmf,
+      map.name
     );
 
     if (
@@ -1234,7 +1260,8 @@ export class MapsService {
     bspId: string,
     bspFile?: File,
     vmfId?: string,
-    vmfZip?: Buffer
+    vmfZip?: Buffer,
+    mapName?: string
   ) {
     const storeFns: Promise<FileStoreFile | boolean>[] = [];
 
@@ -1242,7 +1269,10 @@ export class MapsService {
       if (bspFile.path) {
         storeFns.push(
           this.fileStoreService
-            .copyFile(bspFile.path, bspPath(bspId))
+            .copyFile(bspFile.path, bspPath(bspId), {
+              'Content-Type': 'model/vnd.valve.source.compiled-map',
+              'Content-Disposition': `attachment${mapName ? `; filename="${mapName}.bsp"` : ''}`
+            })
             .then(() => this.fileStoreService.deleteFile(bspFile.path))
         );
       } else {
@@ -1262,140 +1292,15 @@ export class MapsService {
 
   //#region Updates
 
-  async updateAsSubmitter(mapID: number, userID: number, dto: UpdateMapDto) {
-    if (isEmpty(dto)) {
-      throw new BadRequestException('Empty body');
-    }
-
-    const map = (await this.db.mMap.findUnique({
-      where: { id: mapID },
-      include: {
-        submission: {
-          include: {
-            dates: { orderBy: { date: 'asc' }, include: { user: true } }
-          }
-        },
-        currentVersion: true,
-        versions: { include: { submitter: true } },
-        info: true
-      }
-    })) as unknown as MapWithSubmission; // TODO: #855;
-
-    if (!map) throw new NotFoundException('Map does not exist');
-
-    if (userID !== map.submitterID)
-      throw new ForbiddenException('User is not the map submitter');
-
-    if (!MapStatuses.IN_SUBMISSION.includes(map.status))
-      throw new ForbiddenException('Map can only be edited during submission');
-
-    // Force the submitter to keep their suggestions in sync with their zones.
-    // If this requests has new suggestions, use those, otherwise use the
-    // existing ones.
-    //
-    // A map version could've updated the zones to something that doesn't work
-    // with the current suggestions, in this case, the submitter will be forced
-    // to update suggestions next time they do a general update, including if
-    // they want to change the map status. Frontend explains this to the user.
-    const suggs =
-      dto.suggestions ??
-      (map.submission.suggestions as unknown as MapSubmissionSuggestion[]);
-    const zones = JSON.parse(map.currentVersion.zones);
-
-    this.checkSuggestionsAndZones(suggs, zones, SuggestionType.SUBMISSION);
-
-    const user = await this.db.user.findUnique({ where: { id: userID } });
-
-    let statusChanged = false;
-    await this.db.$transaction(async (tx) => {
-      const generalUpdate = this.getGeneralMapDataUpdate(dto, map);
-
-      const statusHandler = await this.mapStatusUpdateHandler(
-        tx,
-        map,
-        dto,
-        user,
-        true
-      );
-
-      if (statusHandler) {
-        await tx.mMap.update({
-          where: { id: mapID },
-          data: deepmerge()(
-            generalUpdate,
-            statusHandler[0]
-          ) as Prisma.MMapUpdateInput
-        });
-        statusChanged = statusHandler[1] !== statusHandler[2];
-
-        // Ensure that discord notification will be sent after update
-        if (
-          statusHandler[2] === MapStatus.PUBLIC_TESTING &&
-          !map.submission.dates.some(
-            (date) => date.status === MapStatus.PUBLIC_TESTING
-          )
-        ) {
-          const extendedMap = await tx.mMap.findUnique({
-            where: { id: map.id },
-            include: {
-              info: true,
-              submission: {
-                include: {
-                  dates: { orderBy: { date: 'asc' }, include: { user: true } }
-                }
-              },
-              submitter: true,
-              credits: { include: { user: true } }
-            }
-          });
-          void this.discordNotificationService.sendPublicTestingNotification(
-            extendedMap
-          );
-        } else if (statusHandler[2] === MapStatus.APPROVED) {
-          const extendedMap = await tx.mMap.findUnique({
-            where: { id: map.id },
-            include: {
-              info: true,
-              leaderboards: true,
-              submitter: true,
-              credits: { include: { user: true } }
-            }
-          });
-          void this.discordNotificationService.sendApprovedNotification(
-            extendedMap
-          );
-        }
-      } else {
-        await tx.mMap.update({
-          where: { id: mapID },
-          data: generalUpdate
-        });
-      }
-
-      if (dto.suggestions) {
-        // It's very uncommon we actually need to do this, but someone *could*
-        // change their suggestions from one mode to another incompatible mode),
-        // so leaderboards would change. Usually there won't be any changes
-        // required though.
-        await this.generateSubmissionLeaderboards(
-          tx,
-          map.id,
-          dto.suggestions,
-          zones
-        );
-      }
-    });
-
-    if (statusChanged) {
-      void this.mapListService.scheduleMapListUpdate(FlatMapList.SUBMISSION);
-    }
-  }
-
   /**
-   * Handles updating the map data as admin/moderator/reviewer. All map status
-   * changes are done here, so a lot can happen.
+   * Handles updating the map data
    */
-  async updateAsAdmin(mapID: number, userID: number, dto: UpdateMapAdminDto) {
+  async update(
+    mapID: number,
+    userID: number,
+    dto: UpdateMapDto,
+    isSubmitter = false
+  ) {
     if (isEmpty(dto)) {
       throw new BadRequestException('Empty body');
     }
@@ -1420,7 +1325,19 @@ export class MapsService {
 
     const user = await this.db.user.findUnique({ where: { id: userID } });
 
-    if (!Bitflags.has(user.roles, CombinedRoles.MOD_OR_ADMIN)) {
+    if (isSubmitter) {
+      if (userID !== map.submitterID) {
+        throw new ForbiddenException('User is not the map submitter');
+      } else if (!MapStatuses.IN_SUBMISSION.includes(map.status)) {
+        throw new ForbiddenException(
+          'Submitters can only edit map during submission'
+        );
+      } else if (dto.leaderboards) {
+        throw new ForbiddenException(
+          'Submitters are not allowed to update map leaderboards'
+        );
+      }
+    } else if (!Bitflags.has(user.roles, CombinedRoles.MOD_OR_ADMIN)) {
       if (Bitflags.has(user.roles, Role.REVIEWER)) {
         // The *only* things reviewer is allowed is to go from
         // content approval -> public testing or rejected
@@ -1435,6 +1352,45 @@ export class MapsService {
       } else {
         throw new ForbiddenException();
       }
+    }
+
+    const zones = JSON.parse(map.currentVersion.zones);
+
+    if (dto.leaderboards) {
+      if (!map.info.approvedDate) {
+        throw new BadRequestException(
+          "Can't update leaderboards of a map that wasn't approved"
+        );
+      } else {
+        this.checkSuggestionsAndZones(
+          dto.leaderboards,
+          zones,
+          SuggestionType.APPROVAL
+        );
+      }
+    }
+
+    if (dto.suggestions) {
+      if (map.info.approvedDate) {
+        throw new BadRequestException(
+          "Can't update suggestions of a map that was approved"
+        );
+      }
+
+      // Force the submitter to keep their suggestions in sync with their zones.
+      // If this requests has new suggestions, use those, otherwise use the
+      // existing ones.
+      //
+      // A map version could've updated the zones to something that doesn't work
+      // with the current suggestions, in this case, the submitter will be forced
+      // to update suggestions next time they do a general update, including if
+      // they want to change the map status. Frontend explains this to the user.
+
+      this.checkSuggestionsAndZones(
+        dto.suggestions,
+        zones,
+        SuggestionType.SUBMISSION
+      );
     }
 
     let oldStatus: MapStatus | undefined;
@@ -1461,82 +1417,95 @@ export class MapsService {
 
       const generalChanges = this.getGeneralMapDataUpdate(dto, map);
 
+      // Do general updates first since some status update refer to current map data for changes
+      let updatedMap = await tx.mMap.update({
+        where: { id: mapID },
+        data: deepmerge({ all: true })(
+          update,
+          generalChanges
+        ) as Prisma.MMapUpdateInput
+      });
+
       const statusHandler = await this.mapStatusUpdateHandler(
         tx,
-        map,
+        { ...map, ...updatedMap },
         dto,
         user,
-        false
+        isSubmitter
       );
 
-      let updatedMap: MMap;
       if (statusHandler) {
         updatedMap = await tx.mMap.update({
           where: { id: mapID },
-          data: deepmerge({ all: true })(
-            update,
-            generalChanges,
-            statusHandler[0]
-          ) as Prisma.MMapUpdateInput
+          data: statusHandler[0]
         });
 
         oldStatus = statusHandler[1];
         newStatus = statusHandler[2];
 
-        // Ensure that discord notification will be sent after update
+        // Discord notifications
         if (
+          newStatus === MapStatus.CONTENT_APPROVAL &&
+          !map.submission.dates.some(
+            (date) => date.status === MapStatus.CONTENT_APPROVAL
+          )
+        ) {
+          void this.discordNotificationService.sendMapContentApprovalNotification(
+            await this.getMapInfoForNotification(map.id)
+          );
+        } else if (
           newStatus === MapStatus.PUBLIC_TESTING &&
           !map.submission.dates.some(
             (date) => date.status === MapStatus.PUBLIC_TESTING
           )
         ) {
-          const extendedMap = await tx.mMap.findUnique({
-            where: { id: map.id },
-            include: {
-              info: true,
-              submission: {
-                include: {
-                  dates: { orderBy: { date: 'asc' }, include: { user: true } }
-                }
-              },
-              submitter: true,
-              credits: { include: { user: true } }
-            }
-          });
           void this.discordNotificationService.sendPublicTestingNotification(
-            extendedMap
+            await this.getMapInfoForNotification(map.id)
           );
-        } else if (newStatus === MapStatus.APPROVED) {
-          const extendedMap = await tx.mMap.findUnique({
-            where: { id: map.id },
-            include: {
-              info: true,
-              leaderboards: true,
-              submitter: true,
-              credits: { include: { user: true } }
-            }
-          });
+        } else if (
+          newStatus === MapStatus.APPROVED &&
+          !map.submission.dates.some(
+            (date) => date.status === MapStatus.APPROVED
+          )
+        ) {
           void this.discordNotificationService.sendApprovedNotification(
-            extendedMap
+            await this.getMapInfoForNotification(map.id)
           );
         }
-      } else {
-        updatedMap = await tx.mMap.update({
-          where: { id: mapID },
-          data: deepmerge({ all: true })(
-            update,
-            generalChanges
-          ) as Prisma.MMapUpdateInput
-        });
       }
 
-      await this.adminActivityService.create(
-        userID,
-        AdminActivityType.MAP_UPDATE,
-        mapID,
-        updatedMap,
-        map
-      );
+      if (dto.suggestions) {
+        // It's very uncommon we actually need to do this, but someone *could*
+        // change their suggestions from one mode to another incompatible mode),
+        // so leaderboards would change. Usually there won't be any changes
+        // required though.
+        await this.generateSubmissionLeaderboards(
+          tx,
+          map.id,
+          dto.suggestions,
+          zones
+        );
+      }
+
+      if (dto.leaderboards) {
+        await this.updateMapLeaderboards(
+          tx,
+          map.id,
+          dto.leaderboards,
+          zones,
+          MapStatuses.IN_SUBMISSION.includes(map.status) &&
+            Bitflags.has(user.roles, Role.ADMIN)
+        );
+      }
+
+      if (!isSubmitter && Bitflags.has(user.roles, CombinedRoles.MOD_OR_ADMIN))
+        await this.adminActivityService.create(
+          userID,
+          AdminActivityType.MAP_UPDATE,
+          mapID,
+          updatedMap,
+          map
+        );
     });
 
     if (newStatus === undefined || oldStatus === undefined) return;
@@ -1560,7 +1529,7 @@ export class MapsService {
   }
 
   private getGeneralMapDataUpdate(
-    dto: UpdateMapDto | UpdateMapAdminDto,
+    dto: UpdateMapDto,
     map: MapWithSubmission
   ): Prisma.MMapUpdateInput {
     const update: Prisma.MMapUpdateInput = {};
@@ -1613,7 +1582,7 @@ export class MapsService {
   private async mapStatusUpdateHandler(
     tx: ExtendedPrismaServiceTransaction,
     map: MapWithSubmission,
-    dto: UpdateMapDto | UpdateMapAdminDto,
+    dto: UpdateMapDto,
     user: User,
     isSubmitter: boolean
   ): Promise<[Prisma.MMapUpdateInput, MapStatus, MapStatus] | undefined> {
@@ -1647,14 +1616,6 @@ export class MapsService {
       newStatus === MapStatus.CONTENT_APPROVAL
     ) {
       await this.deletePrivateTestingInviteNotifications(map.id);
-      if (
-        !map.submission.dates.some(
-          (date) => date.status === MapStatus.CONTENT_APPROVAL
-        )
-      ) {
-        await this.sendContentApprovalNotification(map.id);
-      }
-
       await this.db.mapTestInvite.deleteMany({
         where: { state: MapTestInviteState.UNREAD, mapID: map.id }
       });
@@ -1777,7 +1738,7 @@ export class MapsService {
   private async updateStatusFromFAToApproved(
     tx: ExtendedPrismaServiceTransaction,
     map: MapWithSubmission,
-    dto: UpdateMapAdminDto,
+    dto: UpdateMapDto,
     adminID: number
   ) {
     // Check we don't have any unresolved reviews. Even admins shouldn't be able
@@ -1946,6 +1907,92 @@ export class MapsService {
     await tx.notification.deleteMany({
       where: { type: NotificationType.MAP_TESTING_INVITE, mapID: map.id }
     });
+  }
+
+  private async updateMapLeaderboards(
+    tx: ExtendedPrismaServiceTransaction,
+    mapID: number,
+    suggestions: MapSubmissionSuggestion[],
+    zones: MapZones,
+    allowCreation = false
+  ) {
+    const existingLeaderboards = await this.db.leaderboard.findMany({
+      where: { mapID },
+      select: {
+        gamemode: true,
+        trackNum: true,
+        trackType: true,
+        type: true,
+        tier: true,
+        tags: true
+      }
+    });
+
+    // Not using getMaximalLeaderboards here since it's not needed for leaderboards getting updates
+    const desiredLeaderboards = [
+      ...LeaderboardHandler.setLeaderboardLinearity(suggestions, zones),
+      ...LeaderboardHandler.getStageLeaderboards(suggestions, zones)
+    ];
+
+    const toCreate = desiredLeaderboards.filter(
+      (x) => !existingLeaderboards.some((y) => LeaderboardHandler.isEqual(x, y))
+    );
+
+    if (toCreate.length > 0 && !allowCreation)
+      throw new BadRequestException(
+        'Creating new leaderboards on approved maps is not allowed'
+      );
+
+    await tx.leaderboard.createMany({
+      data: LeaderboardHandler.getCompatibleLeaderboards(toCreate, zones).map(
+        (obj) => ({
+          ...obj,
+          mapID,
+          type:
+            toCreate.find((lb) => LeaderboardHandler.isEqual(lb, obj))?.type ??
+            LeaderboardType.HIDDEN,
+          style: 0 // TODO: Styles
+        })
+      )
+    });
+
+    const toUpdate = existingLeaderboards.reduce((acc, lb) => {
+      const suggestion = desiredLeaderboards.find((sugg) =>
+        LeaderboardHandler.isEqual(lb, sugg)
+      );
+      const desiredType = suggestion?.type ?? LeaderboardType.HIDDEN;
+      const desiredTier = suggestion?.tier ?? null;
+      const desiredTags = suggestion?.tags ?? [];
+
+      if (
+        lb.type !== desiredType ||
+        lb.tier !== desiredTier ||
+        !deepEquals(lb.tags, desiredTags)
+      )
+        acc.push({
+          ...lb,
+          type: desiredType,
+          tier: desiredTier,
+          tags: desiredTags
+        });
+      return acc;
+    }, []);
+
+    for (const {
+      gamemode,
+      trackType,
+      trackNum,
+      type,
+      tier,
+      tags
+    } of toUpdate) {
+      // updateMany rather than update ensures this
+      // handles styles in the future
+      await tx.leaderboard.updateMany({
+        where: { mapID, gamemode, trackType, trackNum },
+        data: { type, tier, tags }
+      });
+    }
   }
 
   //#endregion
@@ -2261,19 +2308,17 @@ export class MapsService {
     });
   }
 
-  async sendContentApprovalNotification(mapID: number) {
-    const extendedMap = await this.db.mMap.findUnique({
+  async getMapInfoForNotification(mapID: number) {
+    return await this.db.mMap.findUnique({
       where: { id: mapID },
       include: {
         info: true,
+        leaderboards: true,
         submission: true,
         submitter: true,
         credits: { include: { user: true } }
       }
     });
-    await this.discordNotificationService.sendMapContentApprovalNotification(
-      extendedMap
-    );
   }
 
   /**
@@ -2309,6 +2354,26 @@ export class MapsService {
         throw new BadRequestException(`Invalid zone files: ${error.message}`);
       } else if (error instanceof SuggestionValidationError) {
         throw new BadRequestException(`Invalid suggestions: ${error.message}`);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Checks that zones don't require leaderboard changes
+   * @throws BadRequestException
+   */
+  checkIfZonesChanged(
+    newZones: MapZones,
+    oldZones: MapZones,
+    allowCreation = false
+  ) {
+    try {
+      validateZoneDiff(newZones, oldZones, allowCreation);
+    } catch (error) {
+      if (error instanceof ZoneDiffValidationError) {
+        throw new BadRequestException(error.message);
       } else {
         throw error;
       }
